@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use itertools::Itertools;
 
 advent_of_code::solution!(4);
@@ -6,100 +8,108 @@ fn parse_input(input: &str) -> Vec<Vec<char>> {
     input.lines().map(|l| l.chars().collect_vec()).collect_vec()
 }
 
-fn neighborhood(grid: &[Vec<char>], y: usize, x: usize) -> Vec<(usize, usize)> {
-    let size_y = grid.len();
-    let size_x = grid[0].len();
-    (-1..=1)
-        .cartesian_product(-1..=1)
-        .filter(|(dy, dx)| !(*dy == 0 && *dx == 0))
-        .map(|(dy, dx)| (y as i32 + dy, x as i32 + dx))
-        .filter(|(ny, nx)| *ny >= 0 && *ny < size_y as i32 && *nx >= 0 && *nx < size_x as i32)
-        .map(|(ny, nx)| (ny as usize, nx as usize))
-        .collect_vec()
-}
-
-fn build_active_neighbours(grid: &[Vec<char>]) -> Vec<Vec<Vec<(usize, usize)>>> {
-    grid.iter()
-        .enumerate()
-        .map(|(y, row)| {
-            row.iter()
-                .enumerate()
-                .map(|(x, _)| {
-                    neighborhood(grid, y, x)
-                        .iter()
-                        .filter(|(ny, nx)| grid[*ny][*nx] == '@')
-                        .copied()
-                        .collect_vec()
+fn padded_grid(grid: &[Vec<char>]) -> Vec<Vec<char>> {
+    (0..grid.len() + 2)
+        .map(|y| {
+            (0..grid[0].len() + 2)
+                .map(|x| {
+                    if y > 0
+                        && x > 0
+                        && y < grid.len() + 1
+                        && x < grid[0].len() + 1
+                        && grid[y - 1][x - 1] == '@'
+                    {
+                        '@'
+                    } else {
+                        '.'
+                    }
                 })
                 .collect_vec()
         })
         .collect_vec()
 }
 
-fn build_active_positions(grid: &[Vec<char>]) -> Vec<(usize, usize)> {
-    grid.iter()
-        .enumerate()
-        .flat_map(|(y, row)| {
-            row.iter()
-                .enumerate()
-                .filter(|(_, c)| **c == '@')
-                .map(move |(x, _)| (y, x))
-        })
-        .collect()
+fn padded_safe_neighborhood(y: usize, x: usize) -> Vec<(usize, usize)> {
+    let transformations = vec![
+        (-1, -1),
+        (-1, 0),
+        (-1, 1),
+        (0, -1),
+        (0, 1),
+        (1, -1),
+        (1, 0),
+        (1, 1),
+    ];
+    transformations
+        .into_iter()
+        .map(|(dy, dx)| ((y as i32 + dy) as usize, (x as i32 + dx) as usize))
+        .collect_vec()
 }
 
 fn anneling(
     grid: &mut [Vec<char>],
-    positions: Vec<(usize, usize)>,
-    neighbours: &[Vec<Vec<(usize, usize)>>],
     max_neighbours: usize,
+    removed_last_time: &[(usize, usize)],
 ) -> Vec<(usize, usize)> {
-    let mut positions_to_clear: Vec<(usize, usize)> = vec![];
-    let new_active_positions = positions
+    let positions_to_check: HashSet<(usize, usize)> = if !removed_last_time.is_empty() {
+        removed_last_time
+            .iter()
+            .flat_map(|(y, x)| {
+                padded_safe_neighborhood(*y, *x)
+                    .iter()
+                    .filter(|(ny, nx)| grid[*ny][*nx] == '@')
+                    .copied()
+                    .collect_vec()
+            })
+            .collect()
+    } else {
+        (0..grid.len())
+            .cartesian_product(0..grid[0].len())
+            .filter(|(y, x)| grid[*y][*x] == '@')
+            .collect()
+    };
+    let removed_positions = positions_to_check
         .iter()
         .filter(|(y, x)| {
-            let to_remove = neighbours[*y][*x]
+            padded_safe_neighborhood(*y, *x)
                 .iter()
                 .filter(|(ny, nx)| grid[*ny][*nx] == '@')
                 .count()
-                <= max_neighbours;
-            if to_remove {
-                positions_to_clear.push((*y, *x));
-            }
-            !to_remove
+                <= max_neighbours
         })
         .copied()
         .collect_vec();
-    for (y, x) in positions_to_clear {
-        grid[y][x] = '.';
+    for (y, x) in removed_positions.iter() {
+        grid[*y][*x] = '.';
     }
-    new_active_positions
+    removed_positions
+}
+
+fn count_active(grid: &[Vec<char>]) -> u64 {
+    grid.iter().flatten().filter(|c| **c == '@').count() as u64
 }
 
 pub fn part_one(input: &str) -> Option<u64> {
     let max_neighbours = 3;
-    let mut grid = parse_input(input);
-    let mut active_positions = build_active_positions(&grid);
-    let neighbours = build_active_neighbours(&grid);
-    let before = active_positions.len();
-    active_positions = anneling(&mut grid, active_positions, &neighbours, max_neighbours);
-    let after = active_positions.len();
+    let mut grid = padded_grid(&parse_input(input));
+    let before = count_active(&grid);
+    let removed_last_time: Vec<(usize, usize)> = vec![];
+    anneling(&mut grid, max_neighbours, &removed_last_time);
+    let after = count_active(&grid);
     Some((before - after) as u64)
 }
 
 pub fn part_two(input: &str) -> Option<u64> {
     let max_neighbours = 3;
-    let mut grid = parse_input(input);
-    let mut active_positions = build_active_positions(&grid);
-    let neighbours = build_active_neighbours(&grid);
-    let before = active_positions.len();
-    let mut last = before;
-    active_positions = anneling(&mut grid, active_positions, &neighbours, max_neighbours);
-    while active_positions.len() < last {
-        last = active_positions.len();
-        active_positions = anneling(&mut grid, active_positions, &neighbours, max_neighbours);
+    let mut grid = padded_grid(&parse_input(input));
+    let before = count_active(&grid);
+    let mut removed_last_time: Vec<(usize, usize)> = vec![];
+    removed_last_time = anneling(&mut grid, max_neighbours, &removed_last_time);
+    while !removed_last_time.is_empty() {
+        removed_last_time = anneling(&mut grid, max_neighbours, &removed_last_time);
     }
-    Some((before - active_positions.len()) as u64)
+    let after = count_active(&grid);
+    Some((before - after) as u64)
 }
 
 #[cfg(test)]
